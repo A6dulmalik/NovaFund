@@ -39,3 +39,4 @@ pub const VOTING_PERIOD: u64 = 604800;
 // Max & Min threshold consts
 pub const MIN_APPROVAL_THRESHOLD: u32 = 5100;  // 51% minimum
 pub const MAX_APPROVAL_THRESHOLD: u32 = 10000; // 100% maximum
+pub const RESUME_TIME_DELAY: u64 = 86400; // 24 hours in seconds

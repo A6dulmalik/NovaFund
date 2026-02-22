@@ -1,10 +1,10 @@
 #![no_std]
 
 use shared::{
-    constants::{MILESTONE_APPROVAL_THRESHOLD, MIN_VALIDATORS},
+    constants::{MILESTONE_APPROVAL_THRESHOLD, MIN_VALIDATORS, RESUME_TIME_DELAY,},
     errors::Error,
     events::*,
-    types::{Amount, EscrowInfo, Hash, Milestone, MilestoneStatus}, MIN_APPROVAL_THRESHOLD, MAX_APPROVAL_THRESHOLD,
+    types::{Amount, EscrowInfo, Hash, Milestone, MilestoneStatus, PauseState}, MIN_APPROVAL_THRESHOLD, MAX_APPROVAL_THRESHOLD,
 };
 use soroban_sdk::{contract, contractimpl, token::TokenClient, Address, BytesN, Env, Vec};
 
@@ -100,6 +100,10 @@ impl EscrowContract {
             return Err(Error::InvalidInput);
         }
 
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         // Update total deposited
         escrow.total_deposited = escrow
             .total_deposited
@@ -144,6 +148,10 @@ impl EscrowContract {
 
         if new_total > escrow.total_deposited {
             return Err(Error::InsufficientEscrowBalance);
+        }
+
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
         }
 
         // Get next milestone ID
@@ -199,6 +207,10 @@ impl EscrowContract {
         // Validate milestone status
         if milestone.status != MilestoneStatus::Pending {
             return Err(Error::InvalidMilestoneStatus);
+        }
+
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
         }
 
         // Update milestone
@@ -267,6 +279,10 @@ impl EscrowContract {
                 .rejection_count
                 .checked_add(1)
                 .ok_or(Error::InvalidInput)?;
+        }
+
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
         }
 
         // Record that this validator voted
@@ -399,6 +415,68 @@ impl EscrowContract {
 
         Ok(())
     }
+
+    /// Pause the contract — halts all critical operations instantly
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the platform admin
+    pub fn pause(env: Env, admin: Address) -> Result<(), Error> {
+        let stored_admin = get_admin(&env)?;
+        if stored_admin != admin {
+            return Err(Error::Unauthorized);
+        }
+        admin.require_auth();
+
+        let now = env.ledger().timestamp();
+        let state = PauseState {
+            paused: true,
+            paused_at: now,
+            resume_not_before: now + RESUME_TIME_DELAY,
+        };
+
+        set_pause_state(&env, &state);
+
+        env.events().publish((CONTRACT_PAUSED,), (admin, now));
+
+        Ok(())
+    }
+
+    /// Resume the contract — only allowed after the time delay has passed
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the platform admin
+    pub fn resume(env: Env, admin: Address) -> Result<(), Error> {
+        let stored_admin = get_admin(&env)?;
+        if stored_admin != admin {
+            return Err(Error::Unauthorized);
+        }
+        admin.require_auth();
+
+        let state = get_pause_state(&env);
+
+        let now = env.ledger().timestamp();
+        if now < state.resume_not_before {
+            return Err(Error::ResumeTooEarly);
+        }
+
+        let new_state = PauseState {
+            paused: false,
+            paused_at: state.paused_at,
+            resume_not_before: state.resume_not_before,
+        };
+
+        set_pause_state(&env, &new_state);
+
+        env.events().publish((CONTRACT_RESUMED,), (admin, now));
+
+        Ok(())
+    }
+
+    /// Returns whether the contract is currently paused
+    pub fn get_is_paused(env: Env) -> bool {
+        is_paused(&env)
+    }
+
 }
 
 /// Helper function to release milestone funds

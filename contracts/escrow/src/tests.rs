@@ -30,6 +30,29 @@ mod tests {
         EscrowContractClient::new(env, &env.register_contract(None, EscrowContract))
     }
 
+    // ====== NEW tests for Emergency Pause/Resume ======
+
+    fn setup_with_admin(
+        env: &Env,
+    ) -> (Address, Address, Address, Vec<Address>, EscrowContractClient) {
+        let admin = Address::generate(env);
+        let creator = Address::generate(env);
+        let token = Address::generate(env);
+
+        let mut validators = Vec::new(env);
+        validators.push_back(Address::generate(env));
+        validators.push_back(Address::generate(env));
+        validators.push_back(Address::generate(env));
+
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(env, &contract_id);
+
+        client.initialize_admin(&admin);
+        client.initialize(&1, &creator, &token, &validators, &DEFAULT_THRESHOLD);
+
+        (admin, creator, token, validators, client)
+    }
+
     /// Default threshold used by all existing tests (67%).
     const DEFAULT_THRESHOLD: u32 = 6700;
 
@@ -493,5 +516,165 @@ mod tests {
             MilestoneStatus::Approved,
             "two approvals should meet the 67% threshold with 3 validators"
         );
+    }
+
+
+    // ====== NEW tests for Emergency Pause/Resume ======
+    #[test]
+    fn test_is_paused_defaults_to_false() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, _, _, _, client) = setup_with_admin(&env);
+
+        assert!(!client.get_is_paused());
+    }
+
+    #[test]
+    fn test_pause_sets_paused_state() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (admin, _, _, _, client) = setup_with_admin(&env);
+
+        client.pause(&admin);
+        assert!(client.get_is_paused());
+    }
+
+    #[test]
+    fn test_pause_blocks_deposit() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (admin, _, _, _, client) = setup_with_admin(&env);
+
+        client.pause(&admin);
+
+        let result = client.try_deposit(&1, &500);
+        assert!(result.is_err(), "deposit should be blocked when paused");
+    }
+
+    #[test]
+    fn test_pause_blocks_create_milestone() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (admin, _, _, _, client) = setup_with_admin(&env);
+
+        client.deposit(&1, &1000); // deposit before pausing
+        client.pause(&admin);
+
+        let description_hash = BytesN::from_array(&env, &[1u8; 32]);
+        let result = client.try_create_milestone(&1, &description_hash, &500);
+        assert!(result.is_err(), "create_milestone should be blocked when paused");
+    }
+
+    #[test]
+    fn test_pause_blocks_submit_milestone() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (admin, _, _, _, client) = setup_with_admin(&env);
+
+        client.deposit(&1, &1000);
+        let description_hash = BytesN::from_array(&env, &[1u8; 32]);
+        client.create_milestone(&1, &description_hash, &500);
+        client.pause(&admin);
+
+        let proof_hash = BytesN::from_array(&env, &[9u8; 32]);
+        let result = client.try_submit_milestone(&1, &0, &proof_hash);
+        assert!(result.is_err(), "submit_milestone should be blocked when paused");
+    }
+
+    #[test]
+    fn test_pause_blocks_vote_milestone() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (admin, _, _, validators, client) = setup_with_admin(&env);
+
+        client.deposit(&1, &1000);
+        let description_hash = BytesN::from_array(&env, &[1u8; 32]);
+        client.create_milestone(&1, &description_hash, &500);
+        let proof_hash = BytesN::from_array(&env, &[9u8; 32]);
+        client.submit_milestone(&1, &0, &proof_hash);
+        client.pause(&admin);
+
+        let voter = validators.get(0).unwrap();
+        let result = client.try_vote_milestone(&1, &0, &voter, &true);
+        assert!(result.is_err(), "vote_milestone should be blocked when paused");
+    }
+
+    #[test]
+    fn test_resume_before_time_delay_fails() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (admin, _, _, _, client) = setup_with_admin(&env);
+
+        client.pause(&admin);
+
+        // Try to resume only 1 hour later — well within the 24hr lock
+        env.ledger().set_timestamp(1000 + 3600);
+        let result = client.try_resume(&admin);
+        assert!(result.is_err(), "resume should fail before time delay expires");
+    }
+
+    #[test]
+    fn test_resume_after_time_delay_succeeds() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (admin, _, _, _, client) = setup_with_admin(&env);
+
+        client.pause(&admin);
+
+        // Advance time past the 24hr delay
+        env.ledger().set_timestamp(1000 + 86400 + 1);
+        let result = client.try_resume(&admin);
+        assert!(result.is_ok(), "resume should succeed after time delay");
+        assert!(!client.get_is_paused());
+    }
+
+    #[test]
+    fn test_operations_work_after_resume() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (admin, _, _, _, client) = setup_with_admin(&env);
+
+        client.pause(&admin);
+        env.ledger().set_timestamp(1000 + 86400 + 1);
+        client.resume(&admin);
+
+        // deposit should work again
+        let result = client.try_deposit(&1, &500);
+        assert!(result.is_ok(), "deposit should work after resume");
+    }
+
+    #[test]
+    fn test_only_admin_can_pause() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (_, _, _, _, client) = setup_with_admin(&env);
+
+        let random = Address::generate(&env);
+        let result = client.try_pause(&random);
+        assert!(result.is_err(), "non-admin should not be able to pause");
+    }
+
+    #[test]
+    fn test_only_admin_can_resume() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1000);
+        env.mock_all_auths();
+        let (admin, _, _, _, client) = setup_with_admin(&env);
+
+        client.pause(&admin);
+        env.ledger().set_timestamp(1000 + 86400 + 1);
+
+        let random = Address::generate(&env);
+        let result = client.try_resume(&random);
+        assert!(result.is_err(), "non-admin should not be able to resume");
     }
 }
