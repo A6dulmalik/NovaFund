@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { validateEnv } from './config/env.validation';
+import { ReputationModule } from './reputation/reputation.module';
 
 @Module({
   imports: [
@@ -11,6 +12,7 @@ import { validateEnv } from './config/env.validation';
       envFilePath: '.env',
       validate: validateEnv,
     }),
+    ReputationModule,
   ],
   controllers: [AppController],
   providers: [AppService],
