@@ -18,6 +18,10 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
     "prepare": "cd .. && husky install backend/.husky"
   },
   "dependencies": {
@@ -25,8 +29,12 @@
     "@nestjs/config": "^3.0.0",
     "@nestjs/core": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
+    "@nestjs/typeorm": "^11.0.0",
+    "@prisma/client": "^7.4.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
+    "pg": "^8.18.0",
+    "prisma": "^7.4.1",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1"
   },
